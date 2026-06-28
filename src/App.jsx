@@ -183,7 +183,7 @@ export default function BuzzerApp() {
   const [myId, setMyId] = useState(null);
 
   // Settings (host only)
-  const [settings, setSettings] = useState({ mode: 'hard', answerTimeout: 10 });
+  const [settings, setSettings] = useState({ mode: 'hard', answerTimeout: 10, autoContinue: true, autoContinueDelay: 10 });
 
   // Game state
   const [revealedClues, setRevealedClues] = useState([]);
@@ -194,8 +194,14 @@ export default function BuzzerApp() {
   const [answerResult, setAnswerResult] = useState(null);
   const [roundResult, setRoundResult] = useState(null);
 
+  // Auto-continue state
+  const [acActive, setAcActive] = useState(false);   // countdown running
+  const [acPaused, setAcPaused] = useState(false);   // countdown paused
+  const [acLeft,   setAcLeft]   = useState(0);        // seconds left
+  const acTimerRef = useRef(null);
+
   const gridTimerRef = useRef(null);
-  const cluesEndRef = useRef(null);
+  const cluesEndRef  = useRef(null);
 
   // ── Derived ──────────────────────────────────────────────────────────────────
   const myPlayer = roomState?.players?.find(p => p.id === myId);
@@ -211,7 +217,24 @@ export default function BuzzerApp() {
     socket.on('round_started', ({ totalClues: tc, roomState: rs }) => {
       setRoomState(rs); setRevealedClues([]); setTotalClues(tc);
       setGrid(null); setAnswerResult(null); setSelectedAnswer(null); setRoundResult(null);
+      setAcActive(false); setAcPaused(false); clearInterval(acTimerRef.current);
       setScreen('game');
+    });
+    socket.on('auto_continue_started', ({ delay }) => {
+      setAcPaused(false);
+      setAcActive(true);
+      setAcLeft(delay);
+      clearInterval(acTimerRef.current);
+      acTimerRef.current = setInterval(() => {
+        setAcLeft(t => {
+          if (t <= 1) { clearInterval(acTimerRef.current); return 0; }
+          return t - 1;
+        });
+      }, 1000);
+    });
+    socket.on('auto_continue_paused', () => {
+      setAcPaused(true);
+      clearInterval(acTimerRef.current);
     });
     socket.on('clue_revealed', ({ revealedClues: rc, totalClues: tc }) => {
       setRevealedClues(rc); setTotalClues(tc);
@@ -245,7 +268,8 @@ export default function BuzzerApp() {
     });
     return () => {
       ['room_updated','round_started','clue_revealed','player_buzzed',
-       'show_grid','answer_result','answer_failed','round_over','game_ended'].forEach(e => socket.off(e));
+       'show_grid','answer_result','answer_failed','round_over','game_ended',
+       'auto_continue_started','auto_continue_paused'].forEach(e => socket.off(e));
     };
   }, [socket, isHost, playBuzz]);
 
@@ -284,6 +308,8 @@ export default function BuzzerApp() {
   const handleStartRound = () => {
     socket.emit('start_round', {}, res => { if (res?.error) setError(res.error); });
   };
+  const handlePauseAC  = () => socket.emit('pause_auto_continue');
+  const handleResumeAC = () => socket.emit('resume_auto_continue');
 
   const handlePressBuzzer = () => {
     socket.emit('press_buzzer', {}, res => { if (res?.error) setError(res.error); });
@@ -360,6 +386,28 @@ export default function BuzzerApp() {
               </div>
             </div>
 
+            <div className="card">
+              <div className="card-label">מעבר אוטומטי לתור הבא</div>
+              <div className="seg">
+                <button className={`seg-btn ${settings.autoContinue ? 'active' : ''}`}
+                  onClick={() => setSettings(s => ({ ...s, autoContinue: true }))}>✓ כן</button>
+                <button className={`seg-btn ${!settings.autoContinue ? 'active' : ''}`}
+                  onClick={() => setSettings(s => ({ ...s, autoContinue: false }))}>✗ לא</button>
+              </div>
+              {settings.autoContinue && (
+                <>
+                  <div className="card-label" style={{ marginTop: 12 }}>עיכוב לפני תור הבא (שניות)</div>
+                  <div className="seg">
+                    {[5, 10, 15].map(t => (
+                      <button key={t} className={`seg-btn ${settings.autoContinueDelay === t ? 'active' : ''}`}
+                        onClick={() => setSettings(s => ({ ...s, autoContinueDelay: t }))}>
+                        {t}ש׳
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
             <div className="spacer" />
             <button className="btn btn-red" disabled={!connected} onClick={handleCreateRoom}>
               צור חדר
@@ -452,11 +500,7 @@ export default function BuzzerApp() {
                 <div className={`result-text ${answerResult.correct ? 'result-correct' : 'result-wrong'}`}>
                   {answerResult.correct ? 'נכון!' : answerResult.timeout ? 'אזל הזמן!' : 'לא נכון!'}
                 </div>
-                {!answerResult.correct && answerResult.word && (
-                  <div style={{ color: '#888', fontSize: 15 }}>
-                    המילה: <strong style={{ color: '#ff2222' }}>{answerResult.word}</strong>
-                  </div>
-                )}
+
               </div>
             )}
           </>
@@ -465,7 +509,9 @@ export default function BuzzerApp() {
         {/* ROUND OVER */}
         {screen === 'round-over' && roundResult && roomState && (
           <RoundOverScreen roundResult={roundResult} roomState={roomState}
-            isHost={isHost} onNextRound={handleStartRound} onHome={() => setScreen('home')} />
+            isHost={isHost} onNextRound={handleStartRound} onHome={() => setScreen('home')}
+            acActive={acActive} acPaused={acPaused} acLeft={acLeft}
+            onPause={handlePauseAC} onResume={handleResumeAC} />
         )}
       </div>
     </>
@@ -627,8 +673,11 @@ function PlayerGameScreen({
 }
 
 // ── Round Over Screen ──────────────────────────────────────────────────────────
-function RoundOverScreen({ roundResult, roomState, isHost, onNextRound, onHome }) {
+function RoundOverScreen({ roundResult, roomState, isHost, onNextRound, onHome,
+    acActive, acPaused, acLeft, onPause, onResume }) {
   const sorted = [...(roomState.players ?? [])].sort((a, b) => b.score - a.score);
+  const pct = acActive && roomState.settings?.autoContinueDelay
+    ? (acLeft / roomState.settings.autoContinueDelay) * 100 : 100;
   return (
     <div className="screen">
       <div className="word-reveal">
@@ -655,10 +704,43 @@ function RoundOverScreen({ roundResult, roomState, isHost, onNextRound, onHome }
         ))}
       </div>
       <div className="spacer" />
-      {isHost
-        ? <button className="btn btn-red" onClick={onNextRound}>▶ סיבוב הבא</button>
-        : <div className="waiting-msg">ממתינים למארח לסיבוב הבא...</div>
-      }
+
+      {/* Auto-continue countdown */}
+      {acActive && !acPaused && (
+        <div style={{ textAlign: 'center', padding: '8px 0 4px' }}>
+          <div style={{ fontSize: 12, color: '#555', marginBottom: 4 }}>התור הבא מתחיל בעוד</div>
+          <div style={{ fontSize: 64, fontWeight: 900, color: '#ff2222', lineHeight: 1,
+            textShadow: '0 0 30px rgba(255,34,34,0.5)' }}>{acLeft}</div>
+          <div style={{ fontSize: 12, color: '#444', marginTop: 2 }}>שניות</div>
+          <div style={{ height: 4, background: '#1a1a1a', borderRadius: 2, margin: '10px 0 0', overflow: 'hidden' }}>
+            <div style={{ height: '100%', background: '#cc0000', borderRadius: 2,
+              width: `${pct}%`, transition: 'width 1s linear' }} />
+          </div>
+        </div>
+      )}
+      {acActive && acPaused && (
+        <div style={{ textAlign: 'center', padding: '8px 0', color: '#555', fontWeight: 700, fontSize: 15 }}>
+          ⏸ מושהה
+        </div>
+      )}
+
+      {/* Host controls */}
+      {isHost && acActive && !acPaused && (
+        <button className="btn btn-dark" onClick={onPause}>⏸ השהה</button>
+      )}
+      {isHost && acActive && acPaused && (
+        <>
+          <button className="btn btn-dark" onClick={onResume}>▶ המשך ספירה לאחור</button>
+          <button className="btn btn-red"  onClick={onNextRound}>⏩ התחל עכשיו</button>
+        </>
+      )}
+      {isHost && !acActive && (
+        <button className="btn btn-red" onClick={onNextRound}>▶ סיבוב הבא</button>
+      )}
+      {!isHost && !acActive && (
+        <div className="waiting-msg">ממתינים למארח לסיבוב הבא...</div>
+      )}
+
       <button className="btn btn-ghost" onClick={onHome}>🏠 חזרה לתפריט</button>
     </div>
   );
