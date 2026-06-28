@@ -663,5 +663,3 @@ function RoundOverScreen({ roundResult, roomState, isHost, onNextRound, onHome }
     </div>
   );
 }
-
-const MODE_LABELS = { easy: '🟢 קל', hard: '🔴 קשה', chaos: '🟣 כאוס' };
