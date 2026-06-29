@@ -412,14 +412,15 @@ export default function BuzzerApp() {
       try { session = JSON.parse(saved); } catch { return; }
       const { code, name } = session;
       socket.emit('join_room', { code, playerName: name }, res => {
-        if (res.error) { clearSession(); return; } // room gone, clear session
+        if (res.error) { clearSession(); return; } // room gone
+        // Safety: only auto-navigate to game if we get valid roomState
+        if (!res.roomState) { clearSession(); return; }
         activeRoomRef.current = code;
         registerGameListeners();
         setRoomCode(code);
         setRoomState(res.roomState);
         setMyId(socket.id);
         setIsHost(res.isHost || false);
-        // Go to appropriate screen based on game phase
         const phase = res.roomState?.phase;
         if (phase === 'lobby') setScreen('lobby');
         else setScreen('game');
@@ -735,7 +736,7 @@ export default function BuzzerApp() {
             activeAnswererNames={activeAnswererNames}
             revealedClues={revealedClues} totalClues={totalClues}
             grid={grid} gridTimeLeft={gridTimeLeft} selectedAnswer={selectedAnswer}
-            answerResult={answerResult} hostDisconnected={hostDisconnected}
+            answerResult={answerResult} isPending={isPending} hostDisconnected={hostDisconnected}
             onPressBuzzer={handlePressBuzzer} onSubmitAnswer={handleSubmitAnswer}
           />
         )}
@@ -759,7 +760,7 @@ function GameScreen({
   roomState, myPlayer, isHost,
   isEliminated, isMeAnswering, isOtherAnswering, canBuzz,
   activeAnswererNames, revealedClues, totalClues,
-  grid, gridTimeLeft, selectedAnswer, answerResult, hostDisconnected,
+  grid, gridTimeLeft, selectedAnswer, answerResult, hostDisconnected, isPending,
   onPressBuzzer, onSubmitAnswer,
 }) {
   const gameMode    = roomState.settings?.mode;
