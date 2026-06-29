@@ -289,9 +289,11 @@ export default function BuzzerApp() {
   const gameMode  = roomState?.settings?.mode;
   const activeAnswererNames = roomState?.activeAnswererNames ?? [];
   const isEliminated = !!myPlayer?.eliminatedThisRound;
+  const hostDisconnected = roomState && !roomState.hostConnected;
   const isMeAnswering = !!grid;
+  const isPending = !!myPlayer?.pendingNextTurn;
   const isOtherAnswering = !isMeAnswering && activeAnswererNames.length > 0 && gamePhase === 'player_answering';
-  const canBuzz = gamePhase === 'clues_running' && !isEliminated && !isMeAnswering;
+  const canBuzz = gamePhase === 'clues_running' && !isEliminated && !isMeAnswering && !isPending;
 
   // Safe setScreen — blocks game/round-over transitions when not in a room
   const setScreen = useCallback((s) => {
@@ -311,7 +313,8 @@ export default function BuzzerApp() {
   // They are removed in handleGoHome(). This avoids any React render-cycle re-registration.
   const GAME_EVENTS = ['room_updated','round_started','clue_revealed','player_buzzed',
     'show_grid','answer_result','answer_failed','round_over','game_ended',
-    'auto_continue_started','auto_continue_paused'];
+    'auto_continue_started','auto_continue_paused',
+    'host_disconnected','host_reconnected'];
 
   const registerGameListeners = () => {
     if (!socket) return;
@@ -368,10 +371,10 @@ export default function BuzzerApp() {
     });
 
     socket.on('game_ended', ({ reason }) => {
-      // Host disconnected or room destroyed — force home regardless
       activeRoomRef.current = null;
       screenRef.current = 'home';
       clearInterval(acTimerRef.current);
+      clearSession();
       GAME_EVENTS.forEach(e => socket.off(e));
       setError(reason || 'המשחק הסתיים');
       _setScreen('home');
@@ -380,7 +383,51 @@ export default function BuzzerApp() {
       setSelectedAnswer(null); setAnswerResult(null); setRoundResult(null);
       setAcActive(false); setAcPaused(false); setAcLeft(0);
     });
+
+    socket.on('host_disconnected', ({ roomState: rs }) => {
+      setRoomState(rs);
+      // Show a banner but keep player in the game (host can reconnect)
+    });
+
+    socket.on('host_reconnected', ({ roomState: rs }) => {
+      setRoomState(rs);
+    });
   };
+
+  // ── Session persistence for reconnect support ────────────────────────────────
+  const saveSession = (code, name, isHost) => {
+    try { sessionStorage.setItem('buzzer_session', JSON.stringify({ code, name, isHost })); } catch(e) {}
+  };
+  const clearSession = () => {
+    try { sessionStorage.removeItem('buzzer_session'); } catch(e) {}
+  };
+
+  // Auto-rejoin on socket connect (handles page refresh / accidental disconnect)
+  useEffect(() => {
+    if (!socket) return;
+    const handleConnect = () => {
+      const saved = sessionStorage.getItem('buzzer_session');
+      if (!saved) return;
+      let session;
+      try { session = JSON.parse(saved); } catch { return; }
+      const { code, name } = session;
+      socket.emit('join_room', { code, playerName: name }, res => {
+        if (res.error) { clearSession(); return; } // room gone, clear session
+        activeRoomRef.current = code;
+        registerGameListeners();
+        setRoomCode(code);
+        setRoomState(res.roomState);
+        setMyId(socket.id);
+        setIsHost(res.isHost || false);
+        // Go to appropriate screen based on game phase
+        const phase = res.roomState?.phase;
+        if (phase === 'lobby') setScreen('lobby');
+        else setScreen('game');
+      });
+    };
+    socket.on('connect', handleConnect);
+    return () => socket.off('connect', handleConnect);
+  }, [socket]);
 
   // Unmount cleanup only
   useEffect(() => {
@@ -404,7 +451,8 @@ export default function BuzzerApp() {
     sounds.resume();
     socket.emit('create_room', { playerName: myName.trim(), settings }, ({ code, roomState: rs }) => {
       activeRoomRef.current = code;
-      registerGameListeners(); // register AFTER confirmed in game
+      registerGameListeners();
+      saveSession(code, myName.trim(), true);
       setRoomCode(code); setRoomState(rs); setMyId(socket.id);
       setIsHost(true); setScreen('lobby'); setError('');
     });
@@ -417,9 +465,10 @@ export default function BuzzerApp() {
     socket.emit('join_room', { code: joinCode.trim().toUpperCase(), playerName: myName.trim() }, res => {
       if (res.error) { setError(res.error); return; }
       activeRoomRef.current = joinCode.trim().toUpperCase();
-      registerGameListeners(); // register AFTER confirmed in game
+      registerGameListeners();
+      saveSession(joinCode.trim().toUpperCase(), myName.trim(), false);
       setRoomCode(joinCode.trim().toUpperCase()); setRoomState(res.roomState);
-      setMyId(socket.id); setIsHost(false); setScreen('lobby'); setError('');
+      setMyId(socket.id); setIsHost(res.isHost || false); setScreen('lobby'); setError('');
     });
   };
 
@@ -481,7 +530,16 @@ export default function BuzzerApp() {
 
         {/* Header */}
         <div className="hdr">
-          <div className="logo">הבאזזר</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className="logo">הבאזזר</div>
+            {roomCode && (
+              <div style={{ fontSize: 13, fontWeight: 900, letterSpacing: 3, color: '#ff2222',
+                background: '#1a0000', border: '1px solid #440000', borderRadius: 20,
+                padding: '3px 10px', opacity: 0.9 }}>
+                {roomCode}
+              </div>
+            )}
+          </div>
           <div className="conn">
             <div className={`dot ${connected ? 'on' : ''}`} />
             {connected ? 'מחובר' : 'מתחבר...'}
@@ -505,6 +563,10 @@ export default function BuzzerApp() {
             <button className="btn btn-dark" disabled={!connected}
               onClick={() => { setScreen('player-setup'); setError(''); }}>
               🎯 הצטרף לחדר
+            </button>
+            <button className="btn btn-ghost" disabled={!connected}
+              onClick={() => { setScreen('rejoin'); setError(''); }}>
+              🔄 חזרה לחדר אחרי ניתוק
             </button>
           </div>
         )}
@@ -572,6 +634,32 @@ export default function BuzzerApp() {
             <div className="spacer" />
             <button className="btn btn-red" disabled={!connected || !myName.trim()} onClick={handleCreateRoom}>
               צור חדר
+            </button>
+            <button className="btn btn-ghost" onClick={() => setScreen('home')}>חזרה</button>
+          </div>
+        )}
+
+        {/* REJOIN */}
+        {screen === 'rejoin' && (
+          <div className="screen">
+            <div className="stitle">חזרה לחדר</div>
+            <div style={{ fontSize: 13, color: '#555', textAlign: 'center', padding: '0 8px 4px' }}>
+              הכנס את קוד החדר והשם שבו השתמשת בו
+            </div>
+            <div className="card">
+              <div className="lbl">קוד חדר</div>
+              <input placeholder="קוד..." value={joinCode} onChange={e => setJoinCode(e.target.value.toUpperCase())}
+                maxLength={6} style={{ fontSize: 24, letterSpacing: 8, textAlign: 'center' }} autoFocus />
+            </div>
+            <div className="card">
+              <div className="lbl">השם שלך במשחק</div>
+              <input placeholder="שמך המקורי..." value={myName} onChange={e => setMyName(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleJoinRoom()} />
+            </div>
+            {error && <div className="err">{error}</div>}
+            <div className="spacer" />
+            <button className="btn btn-red" disabled={!connected || !myName.trim() || !joinCode.trim()} onClick={handleJoinRoom}>
+              🔄 חזרה לחדר
             </button>
             <button className="btn btn-ghost" onClick={() => setScreen('home')}>חזרה</button>
           </div>
@@ -647,7 +735,7 @@ export default function BuzzerApp() {
             activeAnswererNames={activeAnswererNames}
             revealedClues={revealedClues} totalClues={totalClues}
             grid={grid} gridTimeLeft={gridTimeLeft} selectedAnswer={selectedAnswer}
-            answerResult={answerResult}
+            answerResult={answerResult} hostDisconnected={hostDisconnected}
             onPressBuzzer={handlePressBuzzer} onSubmitAnswer={handleSubmitAnswer}
           />
         )}
@@ -671,7 +759,7 @@ function GameScreen({
   roomState, myPlayer, isHost,
   isEliminated, isMeAnswering, isOtherAnswering, canBuzz,
   activeAnswererNames, revealedClues, totalClues,
-  grid, gridTimeLeft, selectedAnswer, answerResult,
+  grid, gridTimeLeft, selectedAnswer, answerResult, hostDisconnected,
   onPressBuzzer, onSubmitAnswer,
 }) {
   const gameMode    = roomState.settings?.mode;
@@ -730,6 +818,17 @@ function GameScreen({
         </div>
       )}
 
+      {/* Host disconnected banner */}
+      {hostDisconnected && (
+        <div style={{ padding: '0 12px' }}>
+          <div style={{ background:'#1a1000', border:'1px solid #554400', borderRadius:12,
+            padding:'9px 14px', textAlign:'center', color:'#ffaa44', fontWeight:700, fontSize:13,
+            animation:'pulse 1.4s infinite' }}>
+            ⏸ המארח התנתק — ממתינים לחזרתו...
+          </div>
+        </div>
+      )}
+
       {/* Action area */}
       <div className="action-area">
 
@@ -750,6 +849,14 @@ function GameScreen({
               ))}
             </div>
           </>
+        ) : isPending ? (
+          /* Waiting for next round */
+          <div className="elim-msg">
+            <div className="elim-icon">⏳</div>
+            <div className="elim-text">מצטרף לסיבוב הבא</div>
+            <div className="elim-sub">תוכל לבזז מהסיבוב הבא</div>
+            <div className="my-score" style={{ marginTop: 8 }}>ניקוד: <strong>{myPlayer?.score ?? 0}</strong></div>
+          </div>
         ) : isEliminated ? (
           /* Eliminated (hard mode) */
           <div className="elim-msg">
@@ -765,7 +872,7 @@ function GameScreen({
               disabled={!canBuzz || isOtherAnswering}>
               <span>BUZZ</span>
               <span className="bzr-sub">
-                {isOtherAnswering ? 'ממתין...' : !canBuzz ? 'ממתין...' : 'לחץ!'}
+                {isOtherAnswering ? 'ממתין...' : isPending ? 'סיבוב הבא' : !canBuzz ? 'ממתין...' : 'לחץ!'}
               </span>
             </button>
             <div className="my-score">ניקוד: <strong>{myPlayer?.score ?? 0}</strong></div>
