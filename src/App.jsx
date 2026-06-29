@@ -354,10 +354,10 @@ export default function BuzzerApp() {
       setGrid(g); setSelectedAnswer(null); setGridTimeLeft(timeLimit);
     });
 
-    socket.on('answer_result', ({ correct, timeout }) => {
+    socket.on('answer_result', ({ correct, timeout, penalty }) => {
       if (correct) soundsRef.current?.playSuccess();
       else soundsRef.current?.playFailure();
-      setAnswerResult({ correct, timeout });
+      setAnswerResult({ correct, timeout, penalty });
       setTimeout(() => { setAnswerResult(null); setGrid(null); setSelectedAnswer(null); }, correct ? 1400 : 1800);
     });
 
@@ -894,6 +894,11 @@ function GameScreen({
           <div className={answerResult.correct ? 'rov-ok' : 'rov-no'}>
             {answerResult.correct ? 'נכון!' : answerResult.timeout ? 'אזל הזמן!' : 'לא נכון!'}
           </div>
+          {answerResult.penalty && (
+            <div style={{ fontSize: 22, fontWeight: 900, color: '#ff4444', marginTop: 6, letterSpacing: 1 }}>
+              {answerResult.penalty} נקודות
+            </div>
+          )}
         </div>
       )}
     </div>
