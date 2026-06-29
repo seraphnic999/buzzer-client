@@ -262,7 +262,7 @@ export default function BuzzerApp() {
 
   // Host settings
   const [settings, setSettings] = useState({
-    mode: 'hard', answerTimeout: 10, autoContinue: true, autoContinueDelay: 10,
+    mode: 'hard', answerTimeout: 10, autoContinue: true, autoContinueDelay: 10, gridSize: 32,
   });
 
   // Game state
@@ -611,6 +611,21 @@ export default function BuzzerApp() {
                     {t}ש׳
                   </button>
                 ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="lbl">גודל גריד</div>
+              <div className="seg">
+                {[[16,'4×4'],[24,'4×6'],[32,'4×8']].map(([n, label]) => (
+                  <button key={n} className={`sbtn ${settings.gridSize === n ? 'on' : ''}`}
+                    onClick={() => setSettings(s => ({ ...s, gridSize: n }))}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="mode-desc" style={{ color: '#555' }}>
+                {settings.gridSize === 16 ? 'גריד קטן — מהיר וקל יותר לסרוק' : settings.gridSize === 24 ? 'גריד בינוני — איזון טוב' : 'גריד מלא — הכי קשה למצוא'}
               </div>
             </div>
 
