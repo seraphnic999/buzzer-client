@@ -21,7 +21,7 @@ function useSocket(url) {
 }
 
 // ── Buzz sound (plays on the pressing player's phone) ─────────────────────────
-function useBuzzSound() {
+function useSounds() {
   const ctxRef = useRef(null);
   const getCtx = useCallback(() => {
     if (!ctxRef.current) ctxRef.current = new (window.AudioContext || window.webkitAudioContext)();
@@ -30,26 +30,65 @@ function useBuzzSound() {
   const resume = useCallback(() => {
     try { const c = getCtx(); if (c.state === 'suspended') c.resume(); } catch(e) {}
   }, [getCtx]);
-  const play = useCallback(() => {
+
+  // ── Buzz: use the real TV-show MP3 ──────────────────────────────────────────
+  const playBuzz = useCallback(() => {
+    try {
+      const a = new Audio('/sounds/buzz.mp3');
+      a.volume = 1.0;
+      a.play().catch(() => {});
+    } catch(e) {}
+  }, []);
+
+  // ── Success: ascending D-major arpeggio + chord ──────────────────────────────
+  const playSuccess = useCallback(() => {
     try {
       const ctx = getCtx();
       if (ctx.state === 'suspended') ctx.resume();
-      const go = (type, freq1, freq2, dur, vol) => {
+      const now = ctx.currentTime;
+      // Four rising notes: D4 F#4 A4 D5
+      [[294,0],[370,0.09],[440,0.18],[587,0.29]].forEach(([freq, t]) => {
         const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = freq;
+        g.gain.setValueAtTime(0, now+t);
+        g.gain.linearRampToValueAtTime(0.55, now+t+0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, now+t+0.22);
         o.connect(g); g.connect(ctx.destination);
-        o.type = type;
-        o.frequency.setValueAtTime(freq1, ctx.currentTime);
-        o.frequency.exponentialRampToValueAtTime(freq2, ctx.currentTime + dur);
-        g.gain.setValueAtTime(0, ctx.currentTime);
-        g.gain.linearRampToValueAtTime(vol, ctx.currentTime + 0.01);
-        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
-        o.start(ctx.currentTime); o.stop(ctx.currentTime + dur);
-      };
-      go('sawtooth', 180, 55, 0.5, 1.0);
-      go('square',   90,  45, 0.4, 0.45);
+        o.start(now+t); o.stop(now+t+0.25);
+      });
+      // Final chord sustain
+      [587,740,880].forEach(freq => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = freq;
+        g.gain.setValueAtTime(0, now+0.29);
+        g.gain.linearRampToValueAtTime(0.22, now+0.33);
+        g.gain.exponentialRampToValueAtTime(0.001, now+0.75);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(now+0.29); o.stop(now+0.8);
+      });
     } catch(e) {}
   }, [getCtx]);
-  return { resume, play };
+
+  // ── Failure: descending minor 3-note drop ────────────────────────────────────
+  const playFailure = useCallback(() => {
+    try {
+      const ctx = getCtx();
+      if (ctx.state === 'suspended') ctx.resume();
+      const now = ctx.currentTime;
+      // Three descending notes: A3 F#3 D3
+      [[220,0],[185,0.13],[147,0.27]].forEach(([freq, t]) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'triangle'; o.frequency.value = freq;
+        g.gain.setValueAtTime(0, now+t);
+        g.gain.linearRampToValueAtTime(0.45, now+t+0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, now+t+0.2);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(now+t); o.stop(now+t+0.23);
+      });
+    } catch(e) {}
+  }, [getCtx]);
+
+  return { resume, playBuzz, playSuccess, playFailure };
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -62,14 +101,14 @@ const MODE_DESCS  = {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const styles = `
-@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;700;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;700;900&family=Secular+One&display=swap');
 *{box-sizing:border-box;margin:0;padding:0;}
 body{font-family:'Heebo',sans-serif;background:#0a0a0a;color:#fff;direction:rtl;height:100dvh;overflow:hidden;}
 .app{max-width:480px;margin:0 auto;height:100dvh;display:flex;flex-direction:column;background:#0a0a0a;}
 
 /* Header */
 .hdr{padding:10px 16px 8px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #1a1a1a;flex-shrink:0;}
-.logo{font-size:22px;font-weight:900;letter-spacing:4px;color:#ff2222;text-shadow:0 0 20px rgba(255,34,34,0.5);}
+.logo{font-family:'Secular One','Heebo',sans-serif;font-size:30px;letter-spacing:1px;color:#ff2222;text-shadow:0 0 28px rgba(255,34,34,0.7),0 2px 0 #550000;}
 .conn{display:flex;align-items:center;gap:5px;background:#1a1a1a;border-radius:20px;padding:3px 10px;font-size:11px;color:#888;}
 .dot{width:7px;height:7px;border-radius:50%;background:#333;transition:all .3s;}
 .dot.on{background:#44ff44;box-shadow:0 0 6px #44ff44;}
@@ -204,7 +243,7 @@ input::placeholder{color:#444;}
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function BuzzerApp() {
   const { socket, connected } = useSocket(SERVER_URL);
-  const buzz = useBuzzSound();
+  const sounds = useSounds();
 
   // Navigation
   const [screen, setScreen] = useState('home'); // home|host-setup|player-setup|lobby|game|round-over
@@ -287,8 +326,10 @@ export default function BuzzerApp() {
     });
 
     socket.on('answer_result', ({ correct, timeout }) => {
+      if (correct) sounds.playSuccess();
+      else sounds.playFailure();
       setAnswerResult({ correct, timeout });
-      setTimeout(() => { setAnswerResult(null); setGrid(null); setSelectedAnswer(null); }, correct ? 1300 : 1700);
+      setTimeout(() => { setAnswerResult(null); setGrid(null); setSelectedAnswer(null); }, correct ? 1400 : 1800);
     });
 
     socket.on('answer_failed', ({ roomState: rs }) => setRoomState(rs));
@@ -308,7 +349,7 @@ export default function BuzzerApp() {
        'answer_result','answer_failed','round_over','game_ended',
        'auto_continue_started','auto_continue_paused'].forEach(e => socket.off(e));
     };
-  }, [socket]);
+  }, [socket, sounds]);
 
   // Grid countdown
   useEffect(() => {
@@ -323,7 +364,7 @@ export default function BuzzerApp() {
   // ── Actions ────────────────────────────────────────────────────────────────
   const handleCreateRoom = () => {
     if (!myName.trim()) { setError('נא להזין שם'); return; }
-    buzz.resume();
+    sounds.resume();
     socket.emit('create_room', { playerName: myName.trim(), settings }, ({ code, roomState: rs }) => {
       setRoomCode(code); setRoomState(rs); setMyId(socket.id);
       setIsHost(true); setScreen('lobby'); setError('');
@@ -333,7 +374,7 @@ export default function BuzzerApp() {
   const handleJoinRoom = () => {
     if (!myName.trim()) { setError('נא להזין שם'); return; }
     if (!joinCode.trim()) { setError('נא להזין קוד'); return; }
-    buzz.resume();
+    sounds.resume();
     socket.emit('join_room', { code: joinCode.trim().toUpperCase(), playerName: myName.trim() }, res => {
       if (res.error) { setError(res.error); return; }
       setRoomCode(joinCode.trim().toUpperCase()); setRoomState(res.roomState);
@@ -346,7 +387,7 @@ export default function BuzzerApp() {
   };
 
   const handlePressBuzzer = () => {
-    buzz.play(); // Loud buzz on THIS player's phone immediately
+    sounds.playBuzz(); // TV-show buzz on THIS player's phone immediately
     socket.emit('press_buzzer', {}, res => { if (res?.error) setError(res.error); });
   };
 
@@ -367,7 +408,7 @@ export default function BuzzerApp() {
 
         {/* Header */}
         <div className="hdr">
-          <div className="logo">BUZZER</div>
+          <div className="logo">הבאזזר</div>
           <div className="conn">
             <div className={`dot ${connected ? 'on' : ''}`} />
             {connected ? 'מחובר' : 'מתחבר...'}
@@ -725,13 +766,13 @@ function RoundOverScreen({ roundResult, roomState, isHost,
       {acActive && acPaused && <div className="ac-pause">⏸ מושהה</div>}
 
       {/* Host controls */}
-      {isHost && acActive && !acPaused && (
-        <button className="btn btn-dark" onClick={onPause}>⏸ השהה</button>
-      )}
-      {isHost && acActive && acPaused && (
+      {isHost && acActive && (
         <>
-          <button className="btn btn-dark"  onClick={onResume}>▶ המשך ספירה</button>
-          <button className="btn btn-red"   onClick={onNextRound}>⏩ התחל עכשיו</button>
+          {!acPaused
+            ? <button className="btn btn-dark" onClick={onPause}>⏸ השהה</button>
+            : <button className="btn btn-dark" onClick={onResume}>▶ המשך ספירה</button>
+          }
+          <button className="btn btn-red" onClick={onNextRound}>⏩ התחל עכשיו</button>
         </>
       )}
       {isHost && !acActive && (
