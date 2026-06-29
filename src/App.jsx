@@ -280,6 +280,7 @@ export default function BuzzerApp() {
   const acTimerRef    = useRef(null);
   const gridTimerRef  = useRef(null);
   const activeRoomRef = useRef(null); // guards stale socket events after leaving
+  const soundsRef      = useRef(sounds); // stable ref so effect doesn't re-run on every render
 
   // Derived
   const myPlayer = roomState?.players?.find(p => p.id === myId);
@@ -290,6 +291,9 @@ export default function BuzzerApp() {
   const isMeAnswering = !!grid;
   const isOtherAnswering = !isMeAnswering && activeAnswererNames.length > 0 && gamePhase === 'player_answering';
   const canBuzz = gamePhase === 'clues_running' && !isEliminated && !isMeAnswering;
+
+  // Keep soundsRef current without making it a socket-effect dependency
+  useEffect(() => { soundsRef.current = sounds; }, [sounds]);
 
   // ── Socket listeners ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -306,6 +310,7 @@ export default function BuzzerApp() {
     });
 
     socket.on('auto_continue_started', ({ delay }) => {
+      if (!activeRoomRef.current) return; // left the game — ignore
       setAcPaused(false); setAcActive(true); setAcLeft(delay);
       clearInterval(acTimerRef.current);
       acTimerRef.current = setInterval(() => {
@@ -328,8 +333,8 @@ export default function BuzzerApp() {
     });
 
     socket.on('answer_result', ({ correct, timeout }) => {
-      if (correct) sounds.playSuccess();
-      else sounds.playFailure();
+      if (correct) soundsRef.current?.playSuccess();
+      else soundsRef.current?.playFailure();
       setAnswerResult({ correct, timeout });
       setTimeout(() => { setAnswerResult(null); setGrid(null); setSelectedAnswer(null); }, correct ? 1400 : 1800);
     });
@@ -337,9 +342,10 @@ export default function BuzzerApp() {
     socket.on('answer_failed', ({ roomState: rs }) => setRoomState(rs));
 
     socket.on('round_over', ({ word, winnerName, points, roomState: rs }) => {
+      if (!activeRoomRef.current) return; // left the game — ignore
       setRoomState(rs); setGrid(null); setSelectedAnswer(null);
       setRoundResult({ word, winnerName, points });
-      setTimeout(() => setScreen('round-over'), 600);
+      setTimeout(() => { if (activeRoomRef.current) setScreen('round-over'); }, 600);
     });
 
     socket.on('game_ended', ({ reason }) => {
@@ -351,7 +357,7 @@ export default function BuzzerApp() {
        'answer_result','answer_failed','round_over','game_ended',
        'auto_continue_started','auto_continue_paused'].forEach(e => socket.off(e));
     };
-  }, [socket, sounds]);
+  }, [socket]); // sounds is accessed via soundsRef — no re-run on every render
 
   // Grid countdown
   useEffect(() => {
@@ -406,8 +412,15 @@ export default function BuzzerApp() {
     activeRoomRef.current = null; // stop stale events immediately
     clearInterval(acTimerRef.current);
     clearInterval(gridTimerRef.current);
-    // Tell server — removes socket from the room so no more broadcasts arrive
-    if (socket) socket.emit('leave_game', {});
+    // Remove all game listeners synchronously BEFORE emitting leave_game.
+    // This guarantees no stale round_started / round_over event can change
+    // the screen, even if the server sends one before processing leave_game.
+    if (socket) {
+      ['room_updated','round_started','clue_revealed','player_buzzed','show_grid',
+       'answer_result','answer_failed','round_over','game_ended',
+       'auto_continue_started','auto_continue_paused'].forEach(e => socket.off(e));
+      socket.emit('leave_game', {});
+    }
     // Reset all local state
     setScreen('home');
     setRoomCode('');
