@@ -391,6 +391,9 @@ export default function BuzzerApp() {
 
     socket.on('host_reconnected', ({ roomState: rs }) => {
       setRoomState(rs);
+      // Sync clue state so re-joining host sees current clues immediately
+      setRevealedClues(rs.revealedClues || []);
+      setTotalClues(rs.totalClues || 0);
     });
   };
 
@@ -419,6 +422,9 @@ export default function BuzzerApp() {
         registerGameListeners();
         setRoomCode(code);
         setRoomState(res.roomState);
+        // Sync local clue state — these are separate from roomState and must be set explicitly
+        setRevealedClues(res.roomState.revealedClues || []);
+        setTotalClues(res.roomState.totalClues || 0);
         setMyId(socket.id);
         setIsHost(res.isHost || false);
         const phase = res.roomState?.phase;
