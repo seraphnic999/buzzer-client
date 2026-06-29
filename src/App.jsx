@@ -261,8 +261,9 @@ export default function BuzzerApp() {
   const [myId, setMyId] = useState(null);
 
   // Host settings
+  const [availableCategories, setAvailableCategories] = useState([]);
   const [settings, setSettings] = useState({
-    mode: 'hard', answerTimeout: 10, autoContinue: true, autoContinueDelay: 10, gridSize: 32,
+    mode: 'hard', answerTimeout: 10, autoContinue: true, autoContinueDelay: 10, gridSize: 32, categories: null,
   });
 
   // Game state
@@ -564,7 +565,13 @@ export default function BuzzerApp() {
             <div style={{ flex: 1 }} />
             {error && <div className="err">{error}</div>}
             <button className="btn btn-red" disabled={!connected}
-              onClick={() => { setScreen('host-setup'); setError(''); }}>
+              onClick={() => {
+                setError('');
+                socket.emit('get_categories', null, ({ categories }) => {
+                  setAvailableCategories(categories || []);
+                  setScreen('host-setup');
+                });
+              }}>
               👑 צור חדר
             </button>
             <button className="btn btn-dark" disabled={!connected}
@@ -629,6 +636,22 @@ export default function BuzzerApp() {
               </div>
             </div>
 
+
+            <div className="card" style={{ cursor: 'pointer' }}
+              onClick={() => setScreen('category-select')}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div className="lbl" style={{ marginBottom: 2 }}>קטגוריות</div>
+                  <div style={{ fontSize: 13, color: settings.categories ? '#ffaa44' : '#55aa55' }}>
+                    {settings.categories
+                      ? `${settings.categories.length} מתוך ${availableCategories.length} נבחרו`
+                      : `כל הקטגוריות (${availableCategories.length})`}
+                  </div>
+                </div>
+                <div style={{ fontSize: 20, color: '#555' }}>›</div>
+              </div>
+            </div>
+
             <div className="card">
               <div className="lbl">מעבר אוטומטי לתור הבא</div>
               <div className="seg">
@@ -658,6 +681,87 @@ export default function BuzzerApp() {
               צור חדר
             </button>
             <button className="btn btn-ghost" onClick={() => setScreen('home')}>חזרה</button>
+          </div>
+        )}
+
+        {/* CATEGORY SELECT */}
+        {screen === 'category-select' && (
+          <div className="screen">
+            <div className="stitle">בחירת קטגוריות</div>
+            <div style={{ fontSize: 13, color: '#555', textAlign: 'center', marginBottom: 8 }}>
+              בחר אילו קטגוריות ייכללו במשחק
+            </div>
+
+            {/* Select all / clear all */}
+            <div style={{ display: 'flex', gap: 8, padding: '0 4px 8px' }}>
+              <button className="btn btn-ghost" style={{ flex: 1, padding: '8px 0', fontSize: 13 }}
+                onClick={() => setSettings(s => ({ ...s, categories: null }))}>
+                ✓ כל הקטגוריות
+              </button>
+              <button className="btn btn-ghost" style={{ flex: 1, padding: '8px 0', fontSize: 13 }}
+                onClick={() => setSettings(s => ({ ...s, categories: [] }))}>
+                ✗ נקה הכל
+              </button>
+            </div>
+
+            {/* Category toggle cards */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+              {availableCategories.map(cat => {
+                const allSelected = settings.categories === null;
+                const isOn = allSelected || (settings.categories || []).includes(cat.id);
+                const toggle = () => {
+                  setSettings(s => {
+                    const cur = s.categories === null
+                      ? availableCategories.map(c => c.id)
+                      : [...(s.categories || [])];
+                    const next = isOn ? cur.filter(id => id !== cat.id) : [...cur, cat.id];
+                    // If all selected, reset to null
+                    return { ...s, categories: next.length === availableCategories.length ? null : next };
+                  });
+                };
+                return (
+                  <div key={cat.id}
+                    onClick={toggle}
+                    style={{
+                      background: isOn ? '#1a0000' : '#111',
+                      border: `2px solid ${isOn ? '#cc0000' : '#222'}`,
+                      borderRadius: 14, padding: '13px 16px', cursor: 'pointer',
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      transition: 'all .15s',
+                    }}>
+                    <div>
+                      <div style={{ fontWeight: 900, fontSize: 16, color: isOn ? '#fff' : '#666' }}>
+                        {cat.name}
+                      </div>
+                      <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>
+                        {cat.count} מילים
+                      </div>
+                    </div>
+                    <div style={{
+                      width: 28, height: 28, borderRadius: 14,
+                      background: isOn ? '#cc0000' : '#222',
+                      border: `2px solid ${isOn ? '#cc0000' : '#333'}`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 16, color: '#fff', flexShrink: 0,
+                    }}>
+                      {isOn ? '✓' : ''}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Warning if nothing selected */}
+            {settings.categories !== null && settings.categories.length === 0 && (
+              <div className="err">יש לבחור לפחות קטגוריה אחת</div>
+            )}
+
+            <div className="spacer" />
+            <button className="btn btn-red"
+              disabled={settings.categories !== null && settings.categories.length === 0}
+              onClick={() => setScreen('host-setup')}>
+              שמור וחזור
+            </button>
           </div>
         )}
 
