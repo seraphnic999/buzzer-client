@@ -246,7 +246,8 @@ export default function BuzzerApp() {
   const sounds = useSounds();
 
   // Navigation
-  const [screen, setScreen] = useState('home'); // home|host-setup|player-setup|lobby|game|round-over
+  const [screen, _setScreen] = useState('home'); // home|host-setup|player-setup|lobby|game|round-over
+  const screenRef = useRef('home'); // sync mirror — updated BEFORE React re-renders
 
   // Identity
   const [isHost, setIsHost] = useState(false);
@@ -292,17 +293,35 @@ export default function BuzzerApp() {
   const isOtherAnswering = !isMeAnswering && activeAnswererNames.length > 0 && gamePhase === 'player_answering';
   const canBuzz = gamePhase === 'clues_running' && !isEliminated && !isMeAnswering;
 
+  // Safe setScreen — blocks game/round-over transitions when not in a room
+  const setScreen = useCallback((s) => {
+    // Prevent any socket event from pulling the user back into game screens
+    // after they've left. screenRef is updated synchronously here,
+    // so the guard is effective even before React re-renders.
+    if ((s === 'game' || s === 'round-over') && !activeRoomRef.current) return;
+    screenRef.current = s;
+    _setScreen(s);
+  }, []);
+
   // Keep soundsRef current without making it a socket-effect dependency
   useEffect(() => { soundsRef.current = sounds; }, [sounds]);
 
-  // ── Socket listeners ────────────────────────────────────────────────────────
-  useEffect(() => {
+  // ── Game socket listeners — managed IMPERATIVELY, not via useEffect ──────────
+  // Listeners are registered in registerGameListeners() when user joins/creates a game.
+  // They are removed in handleGoHome(). This avoids any React render-cycle re-registration.
+  const GAME_EVENTS = ['room_updated','round_started','clue_revealed','player_buzzed',
+    'show_grid','answer_result','answer_failed','round_over','game_ended',
+    'auto_continue_started','auto_continue_paused'];
+
+  const registerGameListeners = () => {
     if (!socket) return;
+    // Clean slate first
+    GAME_EVENTS.forEach(e => socket.off(e));
 
     socket.on('room_updated', rs => setRoomState(rs));
 
     socket.on('round_started', ({ totalClues: tc, roomState: rs }) => {
-      if (!activeRoomRef.current) return; // left the game — ignore
+      if (!activeRoomRef.current) return;
       setRoomState(rs); setRevealedClues([]); setTotalClues(tc);
       setGrid(null); setAnswerResult(null); setSelectedAnswer(null); setRoundResult(null);
       setAcActive(false); setAcPaused(false); clearInterval(acTimerRef.current);
@@ -310,7 +329,7 @@ export default function BuzzerApp() {
     });
 
     socket.on('auto_continue_started', ({ delay }) => {
-      if (!activeRoomRef.current) return; // left the game — ignore
+      if (!activeRoomRef.current) return;
       setAcPaused(false); setAcActive(true); setAcLeft(delay);
       clearInterval(acTimerRef.current);
       acTimerRef.current = setInterval(() => {
@@ -342,22 +361,32 @@ export default function BuzzerApp() {
     socket.on('answer_failed', ({ roomState: rs }) => setRoomState(rs));
 
     socket.on('round_over', ({ word, winnerName, points, roomState: rs }) => {
-      if (!activeRoomRef.current) return; // left the game — ignore
+      if (!activeRoomRef.current) return;
       setRoomState(rs); setGrid(null); setSelectedAnswer(null);
       setRoundResult({ word, winnerName, points });
       setTimeout(() => { if (activeRoomRef.current) setScreen('round-over'); }, 600);
     });
 
     socket.on('game_ended', ({ reason }) => {
-      setError(reason || 'המשחק הסתיים'); setScreen('home');
+      // Host disconnected or room destroyed — force home regardless
+      activeRoomRef.current = null;
+      screenRef.current = 'home';
+      clearInterval(acTimerRef.current);
+      GAME_EVENTS.forEach(e => socket.off(e));
+      setError(reason || 'המשחק הסתיים');
+      _setScreen('home');
+      setRoomCode(''); setRoomState(null); setMyId(null); setIsHost(false);
+      setRevealedClues([]); setTotalClues(0); setGrid(null);
+      setSelectedAnswer(null); setAnswerResult(null); setRoundResult(null);
+      setAcActive(false); setAcPaused(false); setAcLeft(0);
     });
+  };
 
-    return () => {
-      ['room_updated','round_started','clue_revealed','player_buzzed','show_grid',
-       'answer_result','answer_failed','round_over','game_ended',
-       'auto_continue_started','auto_continue_paused'].forEach(e => socket.off(e));
-    };
-  }, [socket]); // sounds is accessed via soundsRef — no re-run on every render
+  // Unmount cleanup only
+  useEffect(() => {
+    return () => { if (socket) GAME_EVENTS.forEach(e => socket.off(e)); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket]);
 
   // Grid countdown
   useEffect(() => {
@@ -374,9 +403,10 @@ export default function BuzzerApp() {
     if (!myName.trim()) { setError('נא להזין שם'); return; }
     sounds.resume();
     socket.emit('create_room', { playerName: myName.trim(), settings }, ({ code, roomState: rs }) => {
+      activeRoomRef.current = code;
+      registerGameListeners(); // register AFTER confirmed in game
       setRoomCode(code); setRoomState(rs); setMyId(socket.id);
       setIsHost(true); setScreen('lobby'); setError('');
-      activeRoomRef.current = code;
     });
   };
 
@@ -386,9 +416,10 @@ export default function BuzzerApp() {
     sounds.resume();
     socket.emit('join_room', { code: joinCode.trim().toUpperCase(), playerName: myName.trim() }, res => {
       if (res.error) { setError(res.error); return; }
+      activeRoomRef.current = joinCode.trim().toUpperCase();
+      registerGameListeners(); // register AFTER confirmed in game
       setRoomCode(joinCode.trim().toUpperCase()); setRoomState(res.roomState);
       setMyId(socket.id); setIsHost(false); setScreen('lobby'); setError('');
-      activeRoomRef.current = joinCode.trim().toUpperCase();
     });
   };
 
@@ -409,20 +440,20 @@ export default function BuzzerApp() {
 
 
   const handleGoHome = () => {
-    activeRoomRef.current = null; // stop stale events immediately
     clearInterval(acTimerRef.current);
     clearInterval(gridTimerRef.current);
-    // Remove all game listeners synchronously BEFORE emitting leave_game.
-    // This guarantees no stale round_started / round_over event can change
-    // the screen, even if the server sends one before processing leave_game.
+    // Set refs synchronously first — this is the definitive guard
+    activeRoomRef.current = null;
+    screenRef.current = 'home';
+    // Remove all game listeners
     if (socket) {
       ['room_updated','round_started','clue_revealed','player_buzzed','show_grid',
        'answer_result','answer_failed','round_over','game_ended',
        'auto_continue_started','auto_continue_paused'].forEach(e => socket.off(e));
       socket.emit('leave_game', {});
     }
-    // Reset all local state
-    setScreen('home');
+    // React state resets
+    _setScreen('home');
     setRoomCode('');
     setRoomState(null);
     setMyId(null);
