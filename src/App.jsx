@@ -277,8 +277,9 @@ export default function BuzzerApp() {
   const [acActive, setAcActive] = useState(false);
   const [acPaused, setAcPaused] = useState(false);
   const [acLeft, setAcLeft] = useState(0);
-  const acTimerRef  = useRef(null);
-  const gridTimerRef = useRef(null);
+  const acTimerRef    = useRef(null);
+  const gridTimerRef  = useRef(null);
+  const activeRoomRef = useRef(null); // guards stale socket events after leaving
 
   // Derived
   const myPlayer = roomState?.players?.find(p => p.id === myId);
@@ -297,6 +298,7 @@ export default function BuzzerApp() {
     socket.on('room_updated', rs => setRoomState(rs));
 
     socket.on('round_started', ({ totalClues: tc, roomState: rs }) => {
+      if (!activeRoomRef.current) return; // left the game — ignore
       setRoomState(rs); setRevealedClues([]); setTotalClues(tc);
       setGrid(null); setAnswerResult(null); setSelectedAnswer(null); setRoundResult(null);
       setAcActive(false); setAcPaused(false); clearInterval(acTimerRef.current);
@@ -368,6 +370,7 @@ export default function BuzzerApp() {
     socket.emit('create_room', { playerName: myName.trim(), settings }, ({ code, roomState: rs }) => {
       setRoomCode(code); setRoomState(rs); setMyId(socket.id);
       setIsHost(true); setScreen('lobby'); setError('');
+      activeRoomRef.current = code;
     });
   };
 
@@ -379,6 +382,7 @@ export default function BuzzerApp() {
       if (res.error) { setError(res.error); return; }
       setRoomCode(joinCode.trim().toUpperCase()); setRoomState(res.roomState);
       setMyId(socket.id); setIsHost(false); setScreen('lobby'); setError('');
+      activeRoomRef.current = joinCode.trim().toUpperCase();
     });
   };
 
@@ -395,6 +399,31 @@ export default function BuzzerApp() {
     if (selectedAnswer) return;
     setSelectedAnswer(answer);
     socket.emit('submit_answer', { answer });
+  };
+
+
+  const handleGoHome = () => {
+    activeRoomRef.current = null; // stop stale events immediately
+    clearInterval(acTimerRef.current);
+    clearInterval(gridTimerRef.current);
+    // Tell server — removes socket from the room so no more broadcasts arrive
+    if (socket) socket.emit('leave_game', {});
+    // Reset all local state
+    setScreen('home');
+    setRoomCode('');
+    setRoomState(null);
+    setMyId(null);
+    setIsHost(false);
+    setRevealedClues([]);
+    setTotalClues(0);
+    setGrid(null);
+    setSelectedAnswer(null);
+    setAnswerResult(null);
+    setRoundResult(null);
+    setAcActive(false);
+    setAcPaused(false);
+    setAcLeft(0);
+    setError('');
   };
 
   const handlePauseAC  = () => socket.emit('pause_auto_continue');
@@ -585,7 +614,7 @@ export default function BuzzerApp() {
             roundResult={roundResult} roomState={roomState} isHost={isHost}
             acActive={acActive} acPaused={acPaused} acLeft={acLeft}
             onNextRound={handleStartRound} onPause={handlePauseAC} onResume={handleResumeAC}
-            onHome={() => setScreen('home')}
+            onHome={handleGoHome}
           />
         )}
       </div>
