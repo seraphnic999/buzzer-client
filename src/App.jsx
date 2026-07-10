@@ -262,8 +262,9 @@ export default function BuzzerApp() {
 
   // Host settings
   const [availableCategories, setAvailableCategories] = useState([]);
+  const [categorySelectReturn, setCategorySelectReturn] = useState('host-setup');
   const [settings, setSettings] = useState({
-    mode: 'hard', answerTimeout: 10, autoContinue: true, autoContinueDelay: 10, gridSize: 32, categories: null,
+    mode: 'chaos', answerTimeout: 10, autoContinue: true, autoContinueDelay: 10, gridSize: 16, categories: null,
   });
 
   // Game state
@@ -315,7 +316,7 @@ export default function BuzzerApp() {
   const GAME_EVENTS = ['room_updated','round_started','clue_revealed','player_buzzed',
     'show_grid','answer_result','answer_failed','round_over','game_ended',
     'auto_continue_started','auto_continue_paused',
-    'host_disconnected','host_reconnected'];
+    'host_disconnected','host_reconnected','settings_updated'];
 
   const registerGameListeners = () => {
     if (!socket) return;
@@ -395,6 +396,10 @@ export default function BuzzerApp() {
       // Sync clue state so re-joining host sees current clues immediately
       setRevealedClues(rs.revealedClues || []);
       setTotalClues(rs.totalClues || 0);
+    });
+
+    socket.on('settings_updated', ({ roomState: rs }) => {
+      setRoomState(rs);
     });
   };
 
@@ -530,6 +535,33 @@ export default function BuzzerApp() {
   const handlePauseAC  = () => socket.emit('pause_auto_continue');
   const handleResumeAC = () => socket.emit('resume_auto_continue');
 
+  const handleEditSettings = () => {
+    // Pause auto-continue so the countdown stops while host edits
+    if (acActive && !acPaused && socket) {
+      socket.emit('pause_auto_continue');
+      setAcPaused(true);
+    }
+    // Sync local settings from current room
+    if (roomState?.settings) setSettings({ ...roomState.settings });
+    // Ensure category list is populated
+    if (availableCategories.length === 0 && socket) {
+      socket.emit('get_categories', null, ({ categories }) => {
+        setAvailableCategories(categories || []);
+      });
+    }
+    setCategorySelectReturn('edit-settings');
+    setScreen('edit-settings');
+  };
+
+  const handleSaveSettings = () => {
+    if (!socket) return;
+    socket.emit('update_settings', { settings }, res => {
+      if (res?.error) { setError(res.error); return; }
+      setError('');
+      setScreen('round-over');
+    });
+  };
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <>
@@ -638,7 +670,7 @@ export default function BuzzerApp() {
 
 
             <div className="card" style={{ cursor: 'pointer' }}
-              onClick={() => setScreen('category-select')}>
+              onClick={() => { setCategorySelectReturn('host-setup'); setScreen('category-select'); }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <div className="lbl" style={{ marginBottom: 2 }}>קטגוריות</div>
@@ -681,6 +713,106 @@ export default function BuzzerApp() {
               צור חדר
             </button>
             <button className="btn btn-ghost" onClick={() => setScreen('home')}>חזרה</button>
+          </div>
+        )}
+
+        {/* EDIT SETTINGS (mid-game, host only) */}
+        {screen === 'edit-settings' && (
+          <div className="screen">
+            <div className="stitle">שנה הגדרות</div>
+            <div style={{ fontSize: 13, color: '#555', textAlign: 'center', marginBottom: 4 }}>
+              השינויים ייכנסו לתוקף מהסיבוב הבא
+            </div>
+
+            <div className="card">
+              <div className="lbl">מצב משחק</div>
+              <div className="seg">
+                {['easy','hard','chaos'].map(m => (
+                  <button key={m}
+                    className={`sbtn ${settings.mode === m ? (m === 'easy' ? 'on-g' : m === 'chaos' ? 'on-c' : 'on') : ''}`}
+                    onClick={() => setSettings(s => ({ ...s, mode: m }))}>
+                    {MODE_LABELS[m]}
+                  </button>
+                ))}
+              </div>
+              <div className="mode-desc">{MODE_DESCS[settings.mode]}</div>
+            </div>
+
+            <div className="card">
+              <div className="lbl">זמן לבחירה מהגריד</div>
+              <div className="seg">
+                {[5, 10, 15, 20].map(t => (
+                  <button key={t} className={`sbtn ${settings.answerTimeout === t ? 'on' : ''}`}
+                    onClick={() => setSettings(s => ({ ...s, answerTimeout: t }))}>
+                    {t}ש׳
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="lbl">גודל גריד</div>
+              <div className="seg">
+                {[[16,'4×4'],[24,'4×6'],[32,'4×8']].map(([n, label]) => (
+                  <button key={n} className={`sbtn ${settings.gridSize === n ? 'on' : ''}`}
+                    onClick={() => setSettings(s => ({ ...s, gridSize: n }))}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="mode-desc" style={{ color: '#555' }}>
+                {settings.gridSize === 16 ? 'גריד קטן — מהיר וקל יותר לסרוק' : settings.gridSize === 24 ? 'גריד בינוני — איזון טוב' : 'גריד מלא — הכי קשה למצוא'}
+              </div>
+            </div>
+
+            <div className="card" style={{ cursor: 'pointer' }}
+              onClick={() => { setCategorySelectReturn('edit-settings'); setScreen('category-select'); }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div className="lbl" style={{ marginBottom: 2 }}>קטגוריות</div>
+                  <div style={{ fontSize: 13, color: settings.categories ? '#ffaa44' : '#55aa55' }}>
+                    {settings.categories
+                      ? `${settings.categories.length} מתוך ${availableCategories.length} נבחרו`
+                      : `כל הקטגוריות (${availableCategories.length})`}
+                  </div>
+                </div>
+                <div style={{ fontSize: 20, color: '#555' }}>›</div>
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="lbl">מעבר אוטומטי לתור הבא</div>
+              <div className="seg">
+                <button className={`sbtn ${settings.autoContinue ? 'on-g' : ''}`}
+                  onClick={() => setSettings(s => ({ ...s, autoContinue: true }))}>✓ כן</button>
+                <button className={`sbtn ${!settings.autoContinue ? 'on' : ''}`}
+                  onClick={() => setSettings(s => ({ ...s, autoContinue: false }))}>✗ לא</button>
+              </div>
+              {settings.autoContinue && (
+                <>
+                  <div className="lbl" style={{ marginTop: 12 }}>עיכוב לפני תור הבא</div>
+                  <div className="seg">
+                    {[5, 10, 15].map(t => (
+                      <button key={t} className={`sbtn ${settings.autoContinueDelay === t ? 'on' : ''}`}
+                        onClick={() => setSettings(s => ({ ...s, autoContinueDelay: t }))}>
+                        {t}ש׳
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {error && <div className="err">{error}</div>}
+            <div className="spacer" />
+            <button className="btn btn-red"
+              disabled={settings.categories !== null && settings.categories.length === 0}
+              onClick={handleSaveSettings}>
+              💾 שמור שינויים
+            </button>
+            <button className="btn btn-ghost" onClick={() => { setError(''); setScreen('round-over'); }}>
+              ביטול
+            </button>
           </div>
         )}
 
@@ -759,7 +891,7 @@ export default function BuzzerApp() {
             <div className="spacer" />
             <button className="btn btn-red"
               disabled={settings.categories !== null && settings.categories.length === 0}
-              onClick={() => setScreen('host-setup')}>
+              onClick={() => setScreen(categorySelectReturn)}>
               שמור וחזור
             </button>
           </div>
@@ -872,6 +1004,7 @@ export default function BuzzerApp() {
             roundResult={roundResult} roomState={roomState} isHost={isHost}
             acActive={acActive} acPaused={acPaused} acLeft={acLeft}
             onNextRound={handleStartRound} onPause={handlePauseAC} onResume={handleResumeAC}
+            onEditSettings={handleEditSettings}
             onHome={handleGoHome}
           />
         )}
@@ -1026,7 +1159,7 @@ function GameScreen({
 
 // ── Round Over Screen ─────────────────────────────────────────────────────────
 function RoundOverScreen({ roundResult, roomState, isHost,
-  acActive, acPaused, acLeft, onNextRound, onPause, onResume, onHome }) {
+  acActive, acPaused, acLeft, onNextRound, onPause, onResume, onEditSettings, onHome }) {
   const sorted = [...(roomState.players ?? [])].sort((a, b) => b.score - a.score);
   const delay  = roomState.settings?.autoContinueDelay || 10;
   const pct    = acActive ? (acLeft / delay) * 100 : 100;
@@ -1094,6 +1227,11 @@ function RoundOverScreen({ roundResult, roomState, isHost,
       )}
 
       <button className="btn btn-ghost" onClick={onHome}>🏠 חזרה לתפריט</button>
+      {isHost && (
+        <button className="btn btn-ghost" style={{ fontSize: 13, opacity: 0.7 }} onClick={onEditSettings}>
+          ⚙️ שנה הגדרות
+        </button>
+      )}
     </div>
   );
 }
