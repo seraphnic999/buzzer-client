@@ -155,8 +155,8 @@ input::placeholder{color:#444;}
 
 /* Clues */
 .clues-wrap{flex:0 1 auto;max-height:42vh;overflow-y:auto;padding:8px 12px 4px;display:flex;flex-direction:column;gap:0;}
-.clue-row{display:flex;gap:8px;padding:7px 0;border-bottom:1px solid #111;font-size:13px;line-height:1.45;color:#777;animation:cin .35s ease;}
-.clue-row:last-child{border:none;color:#fff;font-weight:700;font-size:14px;}
+.clue-row{display:flex;gap:8px;padding:7px 0;border-bottom:1px solid #111;font-size:15px;line-height:1.45;color:#aaa;animation:cin .35s ease;}
+.clue-row:last-child{border:none;color:#fff;font-weight:700;font-size:17px;}
 .clue-row:first-child{margin-top:auto;} /* push newest to bottom */
 .clue-num{font-size:11px;font-weight:900;color:#ff2222;min-width:20px;margin-top:2px;flex-shrink:0;}
 @keyframes cin{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:translateY(0);}}
